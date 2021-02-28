@@ -1,5 +1,7 @@
 package iron;
 
+import haxe.Constraints.Function;
+
 class App {
 
 	#if arm_appwh
@@ -14,6 +16,7 @@ class App {
 	public static inline function y(): Int { return 0; }
 	#end
 
+	static var traitCallbackCommands: Array<TraitCallbackCommand> = [];
 	static var onResets: Array<Void->Void> = null;
 	static var onEndFrames: Array<Void->Void> = null;
 	static var traitInits: Array<Void->Void> = [];
@@ -64,26 +67,15 @@ class App {
 
 		Scene.active.updateFrame();
 
-		var i = 0;
-		var l = traitUpdates.length;
-		while (i < l) {
-			if (traitInits.length > 0) {
-				for (f in traitInits) { traitInits.length > 0 ? f() : break; }
-				traitInits.splice(0, traitInits.length);
-			}
-			traitUpdates[i]();
-			// Account for removed traits
-			l <= traitUpdates.length ? i++ : l = traitUpdates.length;
-		}
+		evalTraitCallbackCommands();
 
-		i = 0;
-		l = traitLateUpdates.length;
-		while (i < l) {
-			traitLateUpdates[i]();
-			l <= traitLateUpdates.length ? i++ : l = traitLateUpdates.length;
-		}
+		for (traitInit in traitInits) { traitInit(); }
+		traitInits.resize(0);
 
-		if (onEndFrames != null) for (f in onEndFrames) f();
+		for (traitUpdate in traitUpdates) { traitUpdate(); }
+		for (traitLateUpdate in traitLateUpdates) { traitLateUpdate(); }
+
+		if (onEndFrames != null) for (traitEndFrame in onEndFrames) traitEndFrame();
 
 		#if arm_debug
 		iron.object.Animation.endFrame();
@@ -112,6 +104,8 @@ class App {
 
 		iron.system.Time.update();
 
+		evalTraitCallbackCommands();
+
 		if (Scene.active == null || !Scene.active.ready) {
 			render2D(frame);
 			return;
@@ -121,14 +115,12 @@ class App {
 		startTime = kha.Scheduler.realTime();
 		#end
 
-		if (traitInits.length > 0) {
-			for (f in traitInits) { traitInits.length > 0 ? f() : break; }
-			traitInits.splice(0, traitInits.length);
-		}
+		for (traitInit in traitInits) { traitInit(); }
+		traitInits.resize(0);
 
 		Scene.active.renderFrame(frame.g4);
 
-		for (f in traitRenders) { traitRenders.length > 0 ? f(frame.g4) : break; }
+		for (traitRender in traitRenders) { traitRender(frame.g4); }
 
 		render2D(frame);
 
@@ -140,67 +132,115 @@ class App {
 	static function render2D(frame: kha.Framebuffer) {
 		if (traitRenders2D.length > 0) {
 			frame.g2.begin(false);
-			for (f in traitRenders2D) { traitRenders2D.length > 0 ? f(frame.g2) : break; }
+			for (traitRender2D in traitRenders2D) { traitRender2D(frame.g2); }
 			frame.g2.end();
 		}
 	}
 
 	// Hooks
 	public static function notifyOnInit(f: Void->Void) {
-		traitInits.push(f);
+		traitCallbackCommands.push({target: Init, add: true, callbackFunc: f});
 	}
 
 	public static function removeInit(f: Void->Void) {
-		traitInits.remove(f);
+		traitCallbackCommands.push({target: Init, add: false, callbackFunc: f});
 	}
 
 	public static function notifyOnUpdate(f: Void->Void) {
-		traitUpdates.push(f);
+		traitCallbackCommands.push({target: Update, add: true, callbackFunc: f});
 	}
 
 	public static function removeUpdate(f: Void->Void) {
-		traitUpdates.remove(f);
+		traitCallbackCommands.push({target: Update, add: false, callbackFunc: f});
 	}
 
 	public static function notifyOnLateUpdate(f: Void->Void) {
-		traitLateUpdates.push(f);
+		traitCallbackCommands.push({target: LateUpdate, add: true, callbackFunc: f});
 	}
 
 	public static function removeLateUpdate(f: Void->Void) {
-		traitLateUpdates.remove(f);
+		traitCallbackCommands.push({target: LateUpdate, add: false, callbackFunc: f});
 	}
 
 	public static function notifyOnRender(f: kha.graphics4.Graphics->Void) {
-		traitRenders.push(f);
+		traitCallbackCommands.push({target: Render, add: true, callbackFunc: f});
 	}
 
 	public static function removeRender(f: kha.graphics4.Graphics->Void) {
-		traitRenders.remove(f);
+		traitCallbackCommands.push({target: Render, add: false, callbackFunc: f});
 	}
 
 	public static function notifyOnRender2D(f: kha.graphics2.Graphics->Void) {
-		traitRenders2D.push(f);
+		traitCallbackCommands.push({target: Render2D, add: true, callbackFunc: f});
 	}
 
 	public static function removeRender2D(f: kha.graphics2.Graphics->Void) {
-		traitRenders2D.remove(f);
+		traitCallbackCommands.push({target: Render2D, add: false, callbackFunc: f});
 	}
 
 	public static function notifyOnReset(f: Void->Void) {
 		if (onResets == null) onResets = [];
-		onResets.push(f);
+		traitCallbackCommands.push({target: Reset, add: false, callbackFunc: f});
 	}
 
 	public static function removeReset(f: Void->Void) {
-		onResets.remove(f);
+		traitCallbackCommands.push({target: Reset, add: false, callbackFunc: f});
 	}
 
 	public static function notifyOnEndFrame(f: Void->Void) {
 		if (onEndFrames == null) onEndFrames = [];
-		onEndFrames.push(f);
+		traitCallbackCommands.push({target: EndFrame, add: true, callbackFunc: f});
 	}
 
 	public static function removeEndFrame(f: Void->Void) {
-		onEndFrames.remove(f);
+		traitCallbackCommands.push({target: EndFrame, add: false, callbackFunc: f});
 	}
+
+	static function evalTraitCallbackCommands() {
+		for (traitCmd in traitCallbackCommands) {
+			var targetArray: Null<Array<Function>> = cast switch (traitCmd.target) {
+				case Init: traitInits;
+				case Update: traitUpdates;
+				case LateUpdate: traitLateUpdates;
+				case EndFrame: onEndFrames;
+				case Reset: onResets;
+				case Render: cast traitRenders;
+				case Render2D: cast traitRenders2D;
+				default: null;
+			}
+
+			// Also happens if onEndFrame or onRenderReset are not initialized
+			if (targetArray == null) continue;
+
+			traitCmd.add ? targetArray.push(traitCmd.callbackFunc) : targetArray.remove(traitCmd.callbackFunc);
+		}
+		traitCallbackCommands.resize(0);
+	}
+}
+
+/**
+	Represents a task that describes how to change the trait callback arrays at
+	the beginning of the next frame, before executing the callbacks. This
+	ensures that the callback arrays are not modified while iterating over them.
+**/
+@:dox(hide)
+@:structInit class TraitCallbackCommand {
+	public final target: TraitCallbackTarget;
+	/** true: add callback to the target, false: remove from the target **/
+	public final add: Bool;
+	public final callbackFunc: Function;
+}
+
+/**
+	@see `iron.App.TraitCallbackCommand`
+**/
+@:dox(hide)
+enum abstract TraitCallbackTarget(Int) {
+	var Init;
+	var Update;
+	var LateUpdate;
+	var EndFrame;
+	var Reset;
+	var Render;
+	var Render2D;
 }
